@@ -13,14 +13,14 @@ The main functionality of the gem is to generate a challenge and verify the resp
 Add this line to your application's Gemfile:
 
 ```ruby
-gem 'altcha-ruby'
+gem 'altcha-rails'
 ```
 
 Then execute `bundle install` to install the gem for your application.
 
 Next, run the generator to install the initializer and the controller:
 
-```bash
+```
 $ rails generate altcha:install
       create  app/models/altcha_solution.rb
       create  app/controllers/altcha_controller.rb
@@ -30,6 +30,8 @@ $ rails generate altcha:install
 ```
 
 This will create an initializer file at `config/initializers/altcha.rb` and a controller at `app/controllers/altcha_controller.rb` as well as a route in `config/routes.rb` and a model at `app/models/altcha-solutions.rb` (see below).
+
+You will also have to run 'rails db:migrate` to apply pending changes to the database.
 
 ## Configuration
 
@@ -45,7 +47,7 @@ end
 ```
 
 The `algorithm` option specifies the hashing algorithm to use and must currently be set to `SHA-256`.
-It is crucial change the `hmac_key` to a secure value. This key is used to sign the challenge and the response,
+It is crucial change the `hmac_key` to a random value. This key is used to sign the challenge and the response,
 so it must be treated as a secret within your application.
 The `num_range` option specifies the range of numbers to use in the challenge and determines the difficulty of the proof-of-work.
 For an explanation of the `timeout` option see below.
@@ -72,13 +74,16 @@ should be called regularly.
 You need to include the ALTCHA javascript widget in your application's asset pipeline. This is not done by the gem
 at this point. Read up on the [ALTCHA documentation](https://altcha.org/docs/website-integration) for more information.
 
-Add then following code to the form you want to protect:
+Then add the following code to the form you want to protect:
 
 ```erb
 <altcha-widget challengeurl="<%= altcha_url() %>"></altcha-widget>
 ```
 
-The widget will create a hidden input field with the name `altcha` and the response to the challenge as its value.
+Once the user clicks the checkbox, the widget will send a request to the server to get a new challenge.
+When the user-side code inside the widget found the solution to the challenge, the spinner will stop
+and a hidden input field with the name `altcha` will be created to convey the solution as base64
+encoded JSON dictionary.
 
 In the controller that handles the form submission, you can verify the response with the following code:
 
@@ -86,10 +91,11 @@ In the controller that handles the form submission, you can verify the response 
 def create
   @model = Model.new(model_params)
 
-unless AltchaSolution.verify_and_save(params.permit(:altcha)[:altcha])
-  flash.now[:alert] = 'ALTCHA verification failed.'
-  render :new
-  return
+  unless AltchaSolution.verify_and_save(params.permit(:altcha)[:altcha])
+    flash.now[:alert] = 'ALTCHA verification failed.'
+    render :new, status: :unprocessable_entity
+    return
+  end
 
   # ...
 end
