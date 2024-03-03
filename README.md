@@ -4,7 +4,7 @@
 
 [ALTCHA](https://altcha.org/) is a protocol designed for safeguarding against spam and abuse by utilizing a proof-of-work mechanism. This protocol comprises both a client-facing widget and a server-side verification process.
 
-`altcha-ruby` is a Ruby gem that provides a simple way to integrate ALTCHA into your Ruby on Rails application.
+`altcha-rails` is a Ruby gem that provides a simple way to integrate ALTCHA into your Ruby on Rails application.
 
 The main functionality of the gem is to generate a challenge and verify the response from the client. This is done in the library code. An initializer and a controller is installed in the host application to handle the challenge generation and verification.
 
