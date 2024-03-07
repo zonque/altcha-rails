@@ -67,7 +67,7 @@ To also guard against replay attacks within the configured `timeout` period, the
 store completed responses. A unique constraint is added to the database to prevent the same response from being stored.
 
 As these stored solutions are useless after the `timeout` period, the `AltchaSolution.cleanup` convenience function
-should be called regularly.
+should be called regularly to purge outdates soltutions from the database.
 
 ## Usage
 
@@ -82,14 +82,14 @@ Then add the following code to the form you want to protect:
 
 Once the user clicks the checkbox, the widget will send a request to the server to get a new challenge.
 When the user-side code inside the widget found the solution to the challenge, the spinner will stop
-and a hidden input field with the name `altcha` will be created to convey the solution as base64
-encoded JSON dictionary.
+and a hidden input field with the name `altcha` will be created in the form to convey the solution as
+base64 encoded JSON dictionary.
 
 In the controller that handles the form submission, you can verify the response with the following code:
 
 ```ruby
 def create
-  @model = Model.new(model_params)
+  @model = Model.create(model_params)
 
   unless AltchaSolution.verify_and_save(params.permit(:altcha)[:altcha])
     flash.now[:alert] = 'ALTCHA verification failed.'
