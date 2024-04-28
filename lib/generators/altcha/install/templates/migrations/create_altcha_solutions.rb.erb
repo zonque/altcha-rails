@@ -10,6 +10,6 @@ class CreateAltchaSolutions < ActiveRecord::Migration[<%= ActiveRecord::Migratio
       t.timestamps
     end
 
-    add_index :altcha_solutions, [ :algorithm, :challenge, :salt, :signature, :number ], unique: true
+    add_index :altcha_solutions, [ :algorithm, :challenge, :salt, :signature, :number ], unique: true, name: 'index_altcha_solutions'
   end
 end
