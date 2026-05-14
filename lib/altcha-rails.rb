@@ -1,66 +1,71 @@
 # frozen_string_literal: true
 
+require "base64"
+require "digest"
+require "json"
+require "openssl"
+require "securerandom"
+
 module Altcha
-  mattr_accessor :configured
-  @@configured = false
+  class ConfigurationError < StandardError; end
 
-  mattr_accessor :algorithm
-  @@algorithm = 'SHA-256'
+  class << self
+    attr_accessor :algorithm, :max_number, :hmac_key, :timeout, :cache_key_prefix
+  end
 
-  mattr_accessor :num_range
-  @@num_range = (50_000..500_000)
-
-  mattr_accessor :hmac_key
-  @@hmac_key = "change-me"
-
-  mattr_accessor :timeout
-  @@timeout = 5.minutes
+  self.algorithm        = "SHA-256"
+  self.max_number       = 1_000_000
+  self.hmac_key         = nil
+  self.timeout          = 300 # seconds; accepts anything responding to #to_i
+  self.cache_key_prefix = "altcha:solution:"
 
   def self.setup
-    @@configured = true
     yield self
   end
 
-  def self.create_challenge
-    Challenge.create
+  # Returns an Altcha::Challenge. Its #to_json produces the payload the
+  # widget expects via the `challenge` attribute.
+  def self.create_challenge(**options)
+    Challenge.create(**options)
   end
 
-  def self.verify(base64encoded)
-    raise "Altcha not configured" unless Altcha.configured
+  # Verifies a base64-encoded JSON submission AND records it in Rails.cache
+  # for replay protection (atomic via `unless_exist: true`, TTL = timeout).
+  # Returns the Altcha::Submission on a fresh accept, nil on failure (invalid
+  # crypto, expired, spliced, or replay within the timeout window).
+  def self.verify(base64_string)
+    submission = Submission.verify(base64_string)
+    return nil unless submission
 
-    payload = JSON.parse(Base64.decode64(base64encoded)) rescue nil
-    return nil if payload.nil?
-
-    submission = Submission.new(payload)
-    return nil unless submission.valid?
-
-    if Rails.cache.write("altcha:solution:#{submission.signature}", true,
-                         expires_in: Altcha.timeout, unless_exist: true)
+    if Rails.cache.write("#{cache_key_prefix}#{submission.signature}", true,
+                         expires_in: timeout, unless_exist: true)
       submission
     else
-      nil
+      nil # replay
     end
   end
 
   class Challenge
     attr_accessor :algorithm, :challenge, :salt, :signature, :max_number
 
-    def self.create
-      raise "Altcha not configured" unless Altcha.configured
+    def self.create(algorithm: nil, hmac_key: nil, max_number: nil, expires: nil, number: nil)
+      hmac_key ||= Altcha.hmac_key
+      raise ConfigurationError, "Altcha.hmac_key is not set" if hmac_key.nil? || hmac_key.empty?
 
-      secret_number = rand(Altcha.num_range)
-      expires = Time.now.to_i + Altcha.timeout.to_i
+      algorithm  ||= Altcha.algorithm
+      max_number ||= Altcha.max_number
+      expires    ||= Time.now.to_i + Altcha.timeout.to_i
+      number     ||= SecureRandom.random_number(max_number)
 
-      a = Challenge.new
-      a.algorithm = Altcha.algorithm
-      a.max_number = Altcha.num_range.max
+      ch = new
+      ch.algorithm  = algorithm
+      ch.max_number = max_number
       # Canonical v1 ALTCHA salt: random hex, expires parameter, trailing '&'
       # to delimit the parameter list from the nonce (CVE-2025-68113).
-      a.salt = "#{SecureRandom.hex(12)}?expires=#{expires}&"
-      a.challenge = Digest::SHA256.hexdigest(a.salt + secret_number.to_s)
-      a.signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new(a.algorithm), Altcha.hmac_key, a.challenge)
-
-      return a
+      ch.salt       = "#{SecureRandom.hex(12)}?expires=#{expires.to_i}&"
+      ch.challenge  = Digest::SHA256.hexdigest(ch.salt + number.to_s)
+      ch.signature  = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new(algorithm), hmac_key, ch.challenge)
+      ch
     end
 
     def to_h
@@ -79,19 +84,33 @@ module Altcha
   end
 
   class Submission
-    attr_accessor :algorithm, :challenge, :salt, :signature, :number
+    attr_reader :algorithm, :challenge, :salt, :signature, :number
 
-    def initialize(v = {})
-      @algorithm = v["algorithm"] || ""
-      @challenge = v["challenge"] || ""
-      @signature = v["signature"] || ""
-      @salt      = v["salt"]      || ""
-      @number    = v["number"]    || 0
+    def self.verify(base64_string)
+      raw = begin
+        Base64.decode64(base64_string.to_s)
+      rescue ArgumentError
+        return nil
+      end
+      payload = JSON.parse(raw) rescue nil
+      return nil unless payload.is_a?(Hash)
+
+      submission = new(payload)
+      submission.valid? ? submission : nil
+    end
+
+    def initialize(payload = {})
+      @algorithm = payload["algorithm"].to_s
+      @challenge = payload["challenge"].to_s
+      @signature = payload["signature"].to_s
+      @salt      = payload["salt"].to_s
+      @number    = payload["number"]
     end
 
     def valid?
       return false unless @algorithm == Altcha.algorithm
       return false unless @number.is_a?(Integer)
+      return false if Altcha.hmac_key.nil? || Altcha.hmac_key.empty?
 
       expires = extract_expires(@salt)
       return false if expires.nil?
@@ -100,7 +119,7 @@ module Altcha
       # Normalize to canonical trailing-'&' form before recomputing the hash;
       # a spliced salt no longer round-trips to the same digest. Mitigates
       # CVE-2025-68113.
-      canonical_salt = @salt.end_with?('&') ? @salt : "#{@salt}&"
+      canonical_salt = @salt.end_with?("&") ? @salt : "#{@salt}&"
       check = Digest::SHA256.hexdigest(canonical_salt + @number.to_s)
 
       return false unless @challenge == check
@@ -114,12 +133,12 @@ module Altcha
     private
 
     def extract_expires(salt)
-      query = salt.split('?', 2)[1]
+      query = salt.split("?", 2)[1]
       return nil unless query
 
-      query.split('&').each do |pair|
-        key, value = pair.split('=', 2)
-        return Integer(value, 10) if key == 'expires' && value
+      query.split("&").each do |pair|
+        key, value = pair.split("=", 2)
+        return Integer(value, 10) if key == "expires" && value
       end
       nil
     rescue ArgumentError

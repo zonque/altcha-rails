@@ -24,18 +24,15 @@ Create `config/initializers/altcha.rb` with the following configuration options:
 
 ```ruby
 Altcha.setup do |config|
-  config.algorithm = 'SHA-256'
-  config.num_range = (50_000..500_000)
-  config.timeout = 5.minutes
-  config.hmac_key = 'change-me'
+  config.hmac_key         = ENV.fetch('ALTCHA_HMAC_KEY')
+  config.algorithm        = 'SHA-256'             # default
+  config.max_number       = 1_000_000             # difficulty: upper bound for the proof-of-work nonce. default 1_000_000
+  config.timeout          = 5.minutes             # default 300 seconds; accepts integers or ActiveSupport durations
+  config.cache_key_prefix = 'altcha:solution:'    # default; prepended to the Rails.cache key used for replay protection
 end
 ```
 
-The `algorithm` option specifies the hashing algorithm to use and must currently be set to `SHA-256`.
-It is crucial change the `hmac_key` to a random value. This key is used to sign the challenge and the response,
-so it must be treated as a secret within your application.
-The `num_range` option specifies the range of numbers to use in the challenge and determines the difficulty of the proof-of-work.
-For an explanation of the `timeout` option see below.
+`hmac_key` has no default — it must be set explicitly. The other options have the defaults shown above.
 
 ## Challenge expiration
 
