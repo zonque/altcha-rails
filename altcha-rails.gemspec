@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |s|
   s.name        = "altcha-rails"
-  s.version     = "0.0.5"
+  s.version     = "0.1.0"
   s.authors     = ["Daniel Mack"]
   s.email       = "altcha-rails.gem@zonque.org"
   s.homepage    = "https://github.com/zonque/altcha-rails"

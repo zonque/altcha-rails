@@ -99,6 +99,134 @@ bundle exec rake test
 
 Tests use Minitest and a small `FakeCache` shim that mimics the bits of `Rails.cache` the gem touches, so the suite runs without booting Rails.
 
+## Changelog
+
+### 0.1.0
+
+This release is a substantial rework. The public API collapses to two module methods, and everything else (model, migration, controller, route, generator) is gone.
+
+**Highlights:**
+
+- **Security fix — [CVE-2025-68113](https://altcha.org/security-advisory/) (challenge splicing / replay).** Salt now follows the canonical v1 ALTCHA format `<random_hex>?expires=<unix_seconds>&`, and `Altcha.verify` normalises the salt to its trailing-`&` form before recomputing the proof-of-work hash. A spliced salt no longer round-trips to the same digest.
+- **No more `AltchaSolution` ActiveRecord model or `altcha_solutions` table.** Replay protection lives in `Rails.cache` (keyed by the submission's HMAC signature, TTL = `Altcha.timeout`, atomic via `unless_exist: true`).
+- **No more generated controller or route.** The widget now accepts the challenge JSON inline via its `challenge` attribute, so the host application no longer needs an endpoint to serve challenges.
+- **No more `rails generate altcha:install` generator.** Configuration is one `Altcha.setup` block — see [Configuration](#configuration) above.
+- **Configuration knob renamed**: `num_range` (Range) → `max_number` (Integer). `hmac_key` no longer has a placeholder default and must be set explicitly. A new `cache_key_prefix` option (default `"altcha:solution:"`) lets you namespace the replay-tracking keys.
+
+#### Upgrade guide from 0.0.x
+
+**1. Confirm your cache backend.** It must be shared across all server processes. In production: `:redis_cache_store`, `:mem_cache_store`, `:solid_cache_store`, `:file_store`, or another shared backend. The default `:memory_store` is per-process and is unsafe here; `:null_store` disables replay protection entirely. See the [Challenge expiration](#challenge-expiration) section.
+
+**2. Delete the generated model:**
+
+```
+rm app/models/altcha_solution.rb
+```
+
+If you have specs covering it, remove those too.
+
+**3. Delete the generated controller:**
+
+```
+rm app/controllers/altcha_controller.rb
+```
+
+If you have specs or request tests covering it, remove those too.
+
+**4. Remove the route.** In `config/routes.rb`, delete the line:
+
+```ruby
+get '/altcha', to: 'altcha#new'
+```
+
+**5. Update your view to inline the challenge JSON.** Replace:
+
+```erb
+<altcha-widget challengeurl="<%= altcha_url %>"></altcha-widget>
+```
+
+with:
+
+```erb
+<altcha-widget challenge='<%= Altcha.create_challenge.to_json %>'></altcha-widget>
+```
+
+The `challenge` attribute is part of the modern ALTCHA widget; the `challengeurl` round-trip is no longer required.
+
+**6. Generate a migration to drop the `altcha_solutions` table:**
+
+```
+$ rails generate migration DropAltchaSolutions
+```
+
+Fill in the generated file as follows (the `down` block is provided so the migration is reversible — adjust the column list if your installation customised it):
+
+```ruby
+class DropAltchaSolutions < ActiveRecord::Migration[7.1]
+  def up
+    drop_table :altcha_solutions
+  end
+
+  def down
+    create_table :altcha_solutions do |t|
+      t.string  :algorithm
+      t.string  :challenge
+      t.string  :salt
+      t.string  :signature
+      t.integer :number
+
+      t.timestamps
+    end
+
+    add_index :altcha_solutions,
+              [:algorithm, :challenge, :salt, :signature, :number],
+              unique: true,
+              name: 'index_altcha_solutions'
+  end
+end
+```
+
+Then run `rails db:migrate`.
+
+**7. Replace the verification call.** The public API moves from the generated model to the gem itself. The return value flips from boolean to `Altcha::Submission`-or-`nil`, but the truthy/falsy semantics are unchanged:
+
+```ruby
+# Before (0.0.x):
+unless AltchaSolution.verify_and_save(params.permit(:altcha)[:altcha])
+  flash.now[:alert] = 'ALTCHA verification failed.'
+  render :new, status: :unprocessable_entity
+  return
+end
+
+# After (0.1.0):
+unless Altcha.verify(params.permit(:altcha)[:altcha])
+  flash.now[:alert] = 'ALTCHA verification failed.'
+  render :new, status: :unprocessable_entity
+  return
+end
+```
+
+**8. Remove `AltchaSolution.cleanup` calls.** Cache entries now expire automatically via `expires_in: Altcha.timeout`, so any scheduled job, rake task, or cron entry that called `AltchaSolution.cleanup` can be deleted.
+
+**9. Update your initializer.** Rename `num_range` to `max_number` (and switch from a Range to an Integer) and remove any placeholder `hmac_key = 'change-me'`:
+
+```ruby
+# Before (0.0.x):
+Altcha.setup do |config|
+  config.algorithm = 'SHA-256'
+  config.num_range = (50_000..500_000)
+  config.timeout   = 5.minutes
+  config.hmac_key  = 'change-me'
+end
+
+# After (0.1.0):
+Altcha.setup do |config|
+  config.hmac_key   = ENV.fetch('ALTCHA_HMAC_KEY')
+  config.max_number = 500_000
+  config.timeout    = 5.minutes
+end
+```
+
 ## Contributing
 
 Bug reports and pull requests are welcome.
