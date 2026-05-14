@@ -90,6 +90,15 @@ end
 `Altcha.verify` returns the `Altcha::Submission` if the response is valid and has not been seen before within the
 timeout window, and `nil` otherwise.
 
+## Development
+
+```
+bundle install
+bundle exec rake test
+```
+
+Tests use Minitest and a small `FakeCache` shim that mimics the bits of `Rails.cache` the gem touches, so the suite runs without booting Rails.
+
 ## Contributing
 
 Bug reports and pull requests are welcome.
