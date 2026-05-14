@@ -21,6 +21,23 @@ module Altcha
     yield self
   end
 
+  def self.verify(base64encoded)
+    raise "Altcha not configured" unless Altcha.configured
+
+    payload = JSON.parse(Base64.decode64(base64encoded)) rescue nil
+    return nil if payload.nil?
+
+    submission = Submission.new(payload)
+    return nil unless submission.valid?
+
+    if Rails.cache.write("altcha:solution:#{submission.signature}", true,
+                         expires_in: Altcha.timeout, unless_exist: true)
+      submission
+    else
+      nil
+    end
+  end
+
   class Challenge
     attr_accessor :algorithm, :challenge, :salt, :signature
 

@@ -22,16 +22,12 @@ Next, run the generator to install the initializer and the controller:
 
 ```
 $ rails generate altcha:install
-      create  app/models/altcha_solution.rb
       create  app/controllers/altcha_controller.rb
       create  config/initializers/altcha.rb
        route  get '/altcha', to: 'altcha#new'
-      create  db/migrate/20240211145410_create_altcha_solutions.rb
 ```
 
-This will create an initializer file at `config/initializers/altcha.rb` and a controller at `app/controllers/altcha_controller.rb` as well as a route in `config/routes.rb` and a model at `app/models/altcha-solutions.rb` (see below).
-
-You will also have to run 'rails db:migrate` to apply pending changes to the database.
+This will create an initializer file at `config/initializers/altcha.rb`, a controller at `app/controllers/altcha_controller.rb`, and a route in `config/routes.rb`.
 
 ## Configuration
 
@@ -63,11 +59,15 @@ value.
 
 ## Replay attacks
 
-To also guard against replay attacks within the configured `timeout` period, the gem uses a model named `AltchaSolution` to
-store completed responses. A unique constraint is added to the database to prevent the same response from being stored.
+To also guard against replay attacks within the configured `timeout` period, the gem records each accepted
+solution in `Rails.cache`, keyed by the solution's HMAC signature. Entries are written with `expires_in: Altcha.timeout`
+and `unless_exist: true`, so a replayed submission within the timeout window is rejected atomically, and entries
+expire automatically once the timeout has passed. No periodic cleanup is required.
 
-As these stored solutions are useless after the `timeout` period, the `AltchaSolution.cleanup` convenience function
-should be called regularly to purge outdates soltutions from the database.
+Make sure `Rails.cache` is configured to use a backend that is shared across all server processes (e.g.
+`:redis_cache_store`, `:mem_cache_store`, `:solid_cache_store`, or `:file_store`). The default `:memory_store` is
+per-process and would let a replay slip through on a different worker; `:null_store` disables replay protection
+entirely.
 
 ## Usage
 
@@ -91,7 +91,7 @@ In the controller that handles the form submission, you can verify the response 
 def create
   @model = Model.create(model_params)
 
-  unless AltchaSolution.verify_and_save(params.permit(:altcha)[:altcha])
+  unless Altcha.verify(params.permit(:altcha)[:altcha])
     flash.now[:alert] = 'ALTCHA verification failed.'
     render :new, status: :unprocessable_entity
     return
@@ -101,7 +101,8 @@ def create
 end
 ```
 
-The `verify_and_save` method will return `true` if the response is valid and has not been used before.
+`Altcha.verify` returns the `Altcha::Submission` if the response is valid and has not been seen before within the
+timeout window, and `nil` otherwise.
 
 ## Contributing
 
