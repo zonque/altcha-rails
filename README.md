@@ -39,9 +39,13 @@ For an explanation of the `timeout` option see below.
 
 ## Challenge expiration
 
-The current time of the server is included in the salt of the challenge. When the client responds, it has to send the
-same salt back, so the server can determine when the challenge was issued. The `timeout` option in the initializer file
-specifies the time that a challenge is valid. If the response is received after the timeout, the verification will fail.
+Each challenge embeds an `expires` parameter in its salt — a Unix timestamp set to `Time.now + Altcha.timeout`.
+When the client responds, the server rejects the submission if that timestamp has passed.
+
+The salt is laid out in the canonical v1 ALTCHA format — `<random_hex>?expires=<unix_seconds>&` — including the
+trailing `&` delimiter that closes the parameter list before the proof-of-work nonce is appended for hashing. This
+delimiter is required by the protocol fix for [CVE-2025-68113](https://altcha.org/security-advisory/) and is enforced
+by `Altcha.verify`.
 
 As users might complete the captcha before filling out a complex form, the `timeout` should be set to a reasonable
 value.

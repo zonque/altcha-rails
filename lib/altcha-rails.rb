@@ -49,11 +49,14 @@ module Altcha
       raise "Altcha not configured" unless Altcha.configured
 
       secret_number = rand(Altcha.num_range)
+      expires = Time.now.to_i + Altcha.timeout.to_i
 
       a = Challenge.new
       a.algorithm = Altcha.algorithm
       a.max_number = Altcha.num_range.max
-      a.salt = [Time.now.to_s, SecureRandom.hex(12)].join('|')
+      # Canonical v1 ALTCHA salt: random hex, expires parameter, trailing '&'
+      # to delimit the parameter list from the nonce (CVE-2025-68113).
+      a.salt = "#{SecureRandom.hex(12)}?expires=#{expires}&"
       a.challenge = Digest::SHA256.hexdigest(a.salt + secret_number.to_s)
       a.signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new(a.algorithm), Altcha.hmac_key, a.challenge)
 
@@ -87,15 +90,48 @@ module Altcha
     end
 
     def valid?
-      check = Digest::SHA256.hexdigest(@salt + @number.to_s)
+      return false unless @algorithm == Altcha.algorithm
+      return false unless @number.is_a?(Integer)
 
-      parts = @salt.split('|')
-      t = Time.parse(parts[0]) rescue nil
+      expires = extract_expires(@salt)
+      return false if expires.nil?
+      return false unless Time.at(expires) > Time.now
 
-      return @algorithm == Altcha.algorithm &&
-        @challenge == check &&
-        @signature == OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new(Altcha.algorithm), Altcha.hmac_key, check) &&
-        t.present? && t > Time.now - Altcha.timeout && t < Time.now
+      # Normalize to canonical trailing-'&' form before recomputing the hash;
+      # a spliced salt no longer round-trips to the same digest. Mitigates
+      # CVE-2025-68113.
+      canonical_salt = @salt.end_with?('&') ? @salt : "#{@salt}&"
+      check = Digest::SHA256.hexdigest(canonical_salt + @number.to_s)
+
+      return false unless @challenge == check
+
+      expected_sig = OpenSSL::HMAC.hexdigest(
+        OpenSSL::Digest.new(@algorithm), Altcha.hmac_key, check
+      )
+      secure_compare(@signature, expected_sig)
+    end
+
+    private
+
+    def extract_expires(salt)
+      query = salt.split('?', 2)[1]
+      return nil unless query
+
+      query.split('&').each do |pair|
+        key, value = pair.split('=', 2)
+        return Integer(value, 10) if key == 'expires' && value
+      end
+      nil
+    rescue ArgumentError
+      nil
+    end
+
+    def secure_compare(a, b)
+      return false unless a.bytesize == b.bytesize
+
+      diff = 0
+      a.bytes.zip(b.bytes) { |x, y| diff |= x ^ y }
+      diff.zero?
     end
   end
 end
