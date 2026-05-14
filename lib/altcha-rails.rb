@@ -21,6 +21,10 @@ module Altcha
     yield self
   end
 
+  def self.create_challenge
+    Challenge.create
+  end
+
   def self.verify(base64encoded)
     raise "Altcha not configured" unless Altcha.configured
 
@@ -39,7 +43,7 @@ module Altcha
   end
 
   class Challenge
-    attr_accessor :algorithm, :challenge, :salt, :signature
+    attr_accessor :algorithm, :challenge, :salt, :signature, :max_number
 
     def self.create
       raise "Altcha not configured" unless Altcha.configured
@@ -48,11 +52,26 @@ module Altcha
 
       a = Challenge.new
       a.algorithm = Altcha.algorithm
+      a.max_number = Altcha.num_range.max
       a.salt = [Time.now.to_s, SecureRandom.hex(12)].join('|')
       a.challenge = Digest::SHA256.hexdigest(a.salt + secret_number.to_s)
       a.signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new(a.algorithm), Altcha.hmac_key, a.challenge)
 
       return a
+    end
+
+    def to_h
+      {
+        algorithm: algorithm,
+        challenge: challenge,
+        maxnumber: max_number,
+        salt: salt,
+        signature: signature,
+      }
+    end
+
+    def to_json(*args)
+      to_h.to_json(*args)
     end
   end
 

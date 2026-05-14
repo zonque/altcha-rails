@@ -6,7 +6,7 @@
 
 `altcha-rails` is a Ruby gem that provides a simple way to integrate ALTCHA into your Ruby on Rails application.
 
-The main functionality of the gem is to generate a challenge and verify the response from the client. This is done in the library code. An initializer and a controller is installed in the host application to handle the challenge generation and verification.
+The gem provides two module methods: `Altcha.create_challenge`, which produces a fresh challenge for the form, and `Altcha.verify`, which validates the widget's submission and records it in `Rails.cache` for replay protection.
 
 ## Installation
 
@@ -16,22 +16,11 @@ Add this line to your application's Gemfile:
 gem 'altcha-rails'
 ```
 
-Then execute `bundle install` to install the gem for your application.
-
-Next, run the generator to install the initializer and the controller:
-
-```
-$ rails generate altcha:install
-      create  app/controllers/altcha_controller.rb
-      create  config/initializers/altcha.rb
-       route  get '/altcha', to: 'altcha#new'
-```
-
-This will create an initializer file at `config/initializers/altcha.rb`, a controller at `app/controllers/altcha_controller.rb`, and a route in `config/routes.rb`.
+Then execute `bundle install`.
 
 ## Configuration
 
-The initializer file `config/initializers/altcha.rb` contains the following configuration options:
+Create `config/initializers/altcha.rb` with the following configuration options:
 
 ```ruby
 Altcha.setup do |config|
@@ -69,23 +58,19 @@ Make sure `Rails.cache` is configured to use a backend that is shared across all
 per-process and would let a replay slip through on a different worker; `:null_store` disables replay protection
 entirely.
 
-## Usage
+## Issuing a challenge
 
-You need to include the ALTCHA javascript widget in your application's asset pipeline. This is not done by the gem
-at this point. Read up on the [ALTCHA documentation](https://altcha.org/docs/website-integration) for more information.
-
-Then add the following code to the form you want to protect:
+`Altcha.create_challenge` returns an `Altcha::Challenge` whose `#to_json` produces exactly the payload the widget expects. The widget accepts this JSON directly via its `challenge` attribute, so no separate `/altcha` route is needed:
 
 ```erb
-<altcha-widget challengeurl="<%= altcha_url() %>"></altcha-widget>
+<altcha-widget challenge='<%= Altcha.create_challenge.to_json %>'></altcha-widget>
 ```
 
-Once the user clicks the checkbox, the widget will send a request to the server to get a new challenge.
-When the user-side code inside the widget found the solution to the challenge, the spinner will stop
-and a hidden input field with the name `altcha` will be created in the form to convey the solution as
-base64 encoded JSON dictionary.
+Include the ALTCHA javascript widget script in your asset pipeline; see [the ALTCHA documentation](https://altcha.org/docs/website-integration) for the widget itself.
 
-In the controller that handles the form submission, you can verify the response with the following code:
+## Verifying a submission
+
+When the form is submitted, the widget sends a base64-encoded JSON payload in a hidden input named `altcha`. In the controller that handles the submission, verify it with:
 
 ```ruby
 def create
